@@ -169,7 +169,7 @@ bool dxlSendInst(dxl_t *p_dxl, uint8_t id,  uint8_t inst, uint8_t *p_param, uint
   p_dxl->packet_buf[index++] = (crc >> 0) & 0xFF;
   p_dxl->packet_buf[index++] = (crc >> 8) & 0xFF;
 
-
+  p_dxl->driver.flush(p_dxl->ch);
   p_dxl->driver.write(p_dxl->ch, p_dxl->packet_buf, index);
 
   return ret;

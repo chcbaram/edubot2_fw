@@ -32,8 +32,8 @@ __attribute__((section(".tag"))) firm_tag_t firm_tag =
 
 __attribute__((section(".version"))) firm_version_t firm_ver =
     {
-        "V210214R3",
-        "STM32F411_Exp_BD"
+        "V210313R1",
+        "EduBot2"
     };
 
 

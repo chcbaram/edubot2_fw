@@ -120,8 +120,13 @@ bool flush(uint8_t dxl_ch)
 {
   bool ret = true;
 
-  (void)dxl_ch;
 
+  switch(dxl_ch)
+  {
+    case _DEF_DXL1:
+      ret = uartFlush(dxl_ch_tbl[dxl_ch]);
+      break;
+  }
 
   return ret;
 }
