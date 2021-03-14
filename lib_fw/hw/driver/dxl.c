@@ -46,7 +46,7 @@ enum
 static bool dxlSendInst(dxl_t *p_dxl, uint8_t id,  uint8_t inst, uint8_t *p_param, uint16_t param_len);
 static bool dxlReceivePacket(dxl_t *p_dxl);
 static uint16_t dxlUpdateCrc(uint16_t crc_accum, uint8_t *data_blk_ptr, uint16_t data_blk_size);
-
+static bool dxlProcessPacket(dxl_t *p_dxl, uint8_t rx_data);
 
 
 
@@ -179,8 +179,7 @@ bool dxlReceivePacket(dxl_t *p_dxl)
 {
   bool ret = false;
   uint8_t rx_data;
-  uint16_t crc;
-  uint16_t index;
+  uint32_t pre_time;
 
 
   if (p_dxl->is_open != true)
@@ -188,14 +187,31 @@ bool dxlReceivePacket(dxl_t *p_dxl)
     return false;
   }
 
-  if (p_dxl->driver.available(p_dxl->ch) > 0)
+  pre_time = millis();
+  while(p_dxl->driver.available(p_dxl->ch) > 0)
   {
     rx_data = p_dxl->driver.read(p_dxl->ch);
+    ret = dxlProcessPacket(p_dxl, rx_data);
+    if (ret == true)
+    {
+      break;
+    }
+
+    if (millis()-pre_time >= 50)
+    {
+      break;
+    }
   }
-  else
-  {
-    return false;
-  }
+
+  return ret;
+}
+
+bool dxlProcessPacket(dxl_t *p_dxl, uint8_t rx_data)
+{
+  bool ret = false;
+  uint16_t crc;
+  uint16_t index;
+
 
   if (millis()-p_dxl->pre_time >= 100)
   {
@@ -643,6 +659,101 @@ bool dxlInstSyncWrite(dxl_t *p_dxl, dxl_sync_write_t *p_inst, uint32_t timeout)
   return ret;
 }
 
+bool dxlInstBulkRead(dxl_t *p_dxl, dxl_bulk_read_t *p_inst, uint32_t timeout)
+{
+  bool ret;
+  uint8_t id;
+  uint16_t index;
+  uint32_t pre_time;
+  uint16_t resp_max_cnt;
+  uint16_t param_addr[DXL_DEVICE_CNT_MAX];
+
+  dxl_bulk_read_node_t *p_node;
+
+  id = DXL_BROADCAST_ID;
+
+
+  resp_max_cnt = p_inst->param.id_cnt;
+
+  index = 0;
+  for (int i=0; i<p_inst->param.id_cnt; i++)
+  {
+    p_dxl->inst_buf[index++] = p_inst->param.id[i];
+    p_dxl->inst_buf[index++] = (p_inst->param.addr[i] >> 0) & 0xFF;
+    p_dxl->inst_buf[index++] = (p_inst->param.addr[i] >> 8) & 0xFF;
+    p_dxl->inst_buf[index++] = (p_inst->param.length[i] >> 0) & 0xFF;
+    p_dxl->inst_buf[index++] = (p_inst->param.length[i] >> 8) & 0xFF;
+
+    param_addr[i]   = p_inst->param.addr[i];
+  }
+
+
+  p_inst->resp.id_cnt = 0;
+  ret = dxlSendInst(p_dxl, id, DXL_INST_BULK_READ, p_dxl->inst_buf, index);
+  if (ret == true)
+  {
+    pre_time = millis();
+    while(millis()-pre_time < timeout)
+    {
+      ret = dxlReceivePacket(p_dxl);
+      if (ret == true)
+      {
+        p_node = &p_inst->resp.node[p_inst->resp.id_cnt];
+
+        p_node->id     = p_dxl->packet.id;
+        p_node->addr   = param_addr[p_inst->resp.id_cnt];
+        p_node->length = p_dxl->packet.param_len;
+        for (int i=0; i<p_node->length; i++)
+        {
+          p_node->data[i] = p_dxl->packet.param[i];
+        }
+
+        p_inst->resp.id_cnt++;
+        if (p_inst->resp.id_cnt >= resp_max_cnt)
+        {
+          break;
+        }
+        pre_time = millis();
+      }
+    }
+  }
+
+  if (p_inst->resp.id_cnt == resp_max_cnt)
+  {
+    ret = true;
+  }
+
+  return ret;
+}
+
+bool dxlInstBulkWrite(dxl_t *p_dxl, dxl_bulk_write_t *p_inst, uint32_t timeout)
+{
+  bool ret;
+  uint8_t id;
+  uint16_t index;
+
+  id = DXL_BROADCAST_ID;
+
+
+  index = 0;
+  for (int i=0; i<p_inst->param.id_cnt; i++)
+  {
+    p_dxl->inst_buf[index++] = p_inst->param.node[i].id;
+    p_dxl->inst_buf[index++] = (p_inst->param.node[i].addr >> 0) & 0xFF;
+    p_dxl->inst_buf[index++] = (p_inst->param.node[i].addr >> 8) & 0xFF;
+    p_dxl->inst_buf[index++] = (p_inst->param.node[i].length >> 0) & 0xFF;
+    p_dxl->inst_buf[index++] = (p_inst->param.node[i].length >> 8) & 0xFF;
+
+    for (int j=0; j<p_inst->param.node[i].length; j++)
+    {
+      p_dxl->inst_buf[index++] = p_inst->param.node[i].data[j];
+    }
+  }
+
+  ret = dxlSendInst(p_dxl, id, DXL_INST_BULK_WRITE, p_dxl->inst_buf, index);
+
+  return ret;
+}
 
 #ifdef _USE_HW_CLI
 
@@ -922,6 +1033,121 @@ static void cliDxl(cli_args_t *args)
     ret = true;
   }
 
+  if (args->argc >= 4 && args->isStr(0, "bulk_read"))
+  {
+    uint8_t dxl_ret;
+    uint8_t id_cnt;
+    dxl_bulk_read_t bulk_read;
+
+
+    if (dxlIsOpen(&cli_dxl) != true)
+    {
+      cliPrintf("dxl port not open\n");
+      return;
+    }
+
+    if ((args->argc-1)%3 != 0)
+    {
+      cliPrintf("param error\n");
+      return;
+    }
+
+    id_cnt = (args->argc-1)/3;
+
+    bulk_read.param.id_cnt = id_cnt;
+    for (int i=0; i<id_cnt; i++)
+    {
+      bulk_read.param.addr[i]   = (uint16_t)args->getData(1+i*3+0);
+      bulk_read.param.length[i] = (uint16_t)args->getData(1+i*3+1);
+      bulk_read.param.id[i]     =  (uint8_t)args->getData(1+i*3+2);
+    }
+
+
+    pre_time = millis();
+    dxl_ret = dxlInstBulkRead(&cli_dxl, &bulk_read, 100);
+    exe_time = millis()-pre_time;
+    if (dxl_ret == true)
+    {
+      cliPrintf("%d ms\n", exe_time);
+
+      for (int i=0; i<bulk_read.resp.id_cnt; i++)
+      {
+        cliPrintf("ID   : %d\n", bulk_read.resp.node[i].id);
+        cliPrintf("ADDR : %d\n", bulk_read.resp.node[i].addr);
+        cliPrintf("LEN  : %d\n", bulk_read.resp.node[i].length);
+        for (int j=0; j<bulk_read.resp.node[i].length; j++)
+        {
+          cliPrintf("   data[%d] : 0x%X(%d)\n",
+                    j,
+                    bulk_read.resp.node[i].data[j],
+                    bulk_read.resp.node[i].data[j]
+                    );
+        }
+      }
+    }
+    else
+    {
+      cliPrintf("dxlInstBulkRead Fail : 0x%X\n", cli_dxl.packet.err);
+    }
+
+    ret = true;
+  }
+
+  if (args->argc >= 5 && args->isStr(0, "bulk_write"))
+  {
+    uint8_t dxl_ret;
+    uint8_t id_cnt;
+    int32_t data;
+    dxl_bulk_write_t bulk_write;
+
+
+    if (dxlIsOpen(&cli_dxl) != true)
+    {
+      cliPrintf("dxl port not open\n");
+      return;
+    }
+
+    if ((args->argc-1)%4 != 0)
+    {
+      cliPrintf("param error\n");
+      return;
+    }
+
+    id_cnt = (args->argc-1)/4;
+    bulk_write.param.id_cnt = id_cnt;
+
+    for (int id_i=0; id_i<id_cnt; id_i++)
+    {
+      bulk_write.param.node[id_i].addr   = (uint16_t)args->getData(1+4*id_i + 0);
+      bulk_write.param.node[id_i].length = (uint16_t)args->getData(1+4*id_i + 1);
+      bulk_write.param.node[id_i].id     = (uint8_t) args->getData(1+4*id_i + 3);
+
+      data = (int32_t)args->getData(1+4*id_i + 2);
+
+      uint8_t *p_data;
+
+      p_data = (uint8_t *)&data;
+      for (int j=0; j<bulk_write.param.node[id_i].length; j++)
+      {
+        bulk_write.param.node[id_i].data[j] = p_data[j];
+      }
+    }
+
+    pre_time = millis();
+    dxl_ret = dxlInstBulkWrite(&cli_dxl, &bulk_write, 100);
+    exe_time = millis()-pre_time;
+    if (dxl_ret == true)
+    {
+      cliPrintf("%d ms\n", exe_time);
+    }
+    else
+    {
+      cliPrintf("dxlInstBulkWrite Fail \n");
+    }
+
+    ret = true;
+  }
+
   if (args->argc == 3 && args->isStr(0, "test_motor"))
   {
     //uint8_t dxl_ret;
@@ -1040,6 +1266,10 @@ static void cliDxl(cli_args_t *args)
     cliPrintf("dxl write id addr data len(~4)\n");
     cliPrintf("dxl sync_read addr len id1 id2 ...\n");
     cliPrintf("dxl sync_write addr len data id1 id2 ...\n");
+
+    cliPrintf("dxl bulk_read  [addr len id1] [addr len id1] ...\n");
+    cliPrintf("dxl bulk_write [addr len data id1] [addr len data id2] ...\n");
+
 
     cliPrintf("dxl test_led id\n");
     cliPrintf("dxl test_motor id_l id_r\n");

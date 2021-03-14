@@ -21,7 +21,8 @@
 #define DXL_PACKET_BUF_MAX        HW_DXL_PACKET_BUF_MAX
 #define DXL_DEVICE_CNT_MAX        HW_DXL_DEVICE_CNT_MAX
 
-#define DXL_SYNC_DATA_MAX         ((DXL_PACKET_BUF_MAX-14-DXL_DEVICE_CNT_MAX)/DXL_DEVICE_CNT_MAX)
+#define DXL_SYNC_DATA_MAX         ((DXL_PACKET_BUF_MAX-14-DXL_DEVICE_CNT_MAX*1)/DXL_DEVICE_CNT_MAX)
+#define DXL_BULK_DATA_MAX         ((DXL_PACKET_BUF_MAX-14-DXL_DEVICE_CNT_MAX*5)/DXL_DEVICE_CNT_MAX)
 
 
 #define DXL_BROADCAST_ID          254
@@ -170,11 +171,75 @@ typedef union
 } dxl_sync_write_t;
 
 
+//-- Bulk Read
+//
+typedef struct
+{
+  uint8_t  id;
+  uint16_t addr;
+  uint16_t length;
+  uint8_t  data[DXL_BULK_DATA_MAX];
+} dxl_bulk_read_param_node_t;
+
+typedef struct
+{
+  uint8_t  id_cnt;
+  uint8_t  id    [DXL_DEVICE_CNT_MAX];
+  uint16_t addr  [DXL_DEVICE_CNT_MAX];
+  uint16_t length[DXL_DEVICE_CNT_MAX];
+} dxl_bulk_read_param_t;
+
+typedef struct
+{
+  uint8_t  id;
+  uint16_t addr;
+  uint16_t length;
+  uint8_t  data[DXL_BULK_DATA_MAX];
+} dxl_bulk_read_node_t;
+
+typedef struct
+{
+  uint8_t id_cnt;
+  dxl_bulk_read_node_t  node[DXL_DEVICE_CNT_MAX];
+} dxl_bulk_read_resp_t;
+
+typedef union
+{
+  dxl_bulk_read_param_t  param;
+  dxl_bulk_read_resp_t   resp;
+} dxl_bulk_read_t;
+
+
+//-- Bulk Write
+//
+typedef struct
+{
+  uint8_t  id;
+  uint16_t addr;
+  uint16_t length;
+  uint8_t data[DXL_BULK_DATA_MAX];
+} dxl_bulk_write_node_t;
+
+typedef struct
+{
+  uint8_t  id_cnt;
+  dxl_bulk_write_node_t node[DXL_DEVICE_CNT_MAX];
+} dxl_bulk_write_param_t;
+
+typedef union
+{
+  dxl_bulk_write_param_t  param;
+} dxl_bulk_write_t;
+
+
+
 typedef union
 {
   dxl_ping_t       ping;
   dxl_sync_read_t  sync_read;
   dxl_sync_write_t sync_write;
+  dxl_bulk_read_t  bulk_read;
+  dxl_bulk_write_t bulk_write;
 } dxl_inst_t;
 
 
@@ -192,6 +257,8 @@ bool dxlInstWrite(dxl_t *p_dxl, uint8_t id, uint16_t addr, uint8_t *p_data, uint
 bool dxlInstSyncRead(dxl_t *p_dxl, dxl_sync_read_t *p_inst, uint32_t timeout);
 bool dxlInstSyncWrite(dxl_t *p_dxl, dxl_sync_write_t *p_inst, uint32_t timeout);
 
+bool dxlInstBulkRead(dxl_t *p_dxl, dxl_bulk_read_t *p_inst, uint32_t timeout);
+bool dxlInstBulkWrite(dxl_t *p_dxl, dxl_bulk_write_t *p_inst, uint32_t timeout);
 
 #endif
 
