@@ -15,6 +15,18 @@
 
 
 bool espInit(void);
+bool espOpen(uint8_t ch, uint32_t baud);
+bool espIsOpen(void);
+
+uint32_t espAvailable(void);
+uint32_t espWrite(uint8_t *p_data, uint32_t length);
+uint8_t  espRead(void);
+uint32_t espPrintf(char *fmt, ...);
+
+bool espCmd(const char *cmd_str, uint32_t timeout);
+void espLogEnable(void);
+void espLogDisable(void);
+bool espWaitOK(uint32_t timeout);
 
 #endif
 
