@@ -28,6 +28,7 @@ void espLogDisable(void);
 bool espCmd(const char *cmd_str, uint32_t timeout);
 bool espPing(uint32_t timeout);
 bool espWaitOK(uint32_t timeout);
+bool espConnectWifi(char *ssd_str, char *pswd_str, uint32_t timeout);
 bool espClientBegin(char *ip_str, char *port_str, uint32_t timeout);
 bool espClientEnd(void);
 
