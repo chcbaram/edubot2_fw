@@ -23,10 +23,13 @@ uint32_t espWrite(uint8_t *p_data, uint32_t length);
 uint8_t  espRead(void);
 uint32_t espPrintf(char *fmt, ...);
 
-bool espCmd(const char *cmd_str, uint32_t timeout);
 void espLogEnable(void);
 void espLogDisable(void);
+bool espCmd(const char *cmd_str, uint32_t timeout);
+bool espPing(uint32_t timeout);
 bool espWaitOK(uint32_t timeout);
+bool espClientBegin(char *ip_str, char *port_str, uint32_t timeout);
+bool espClientEnd(void);
 
 #endif
 

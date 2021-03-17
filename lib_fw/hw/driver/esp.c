@@ -9,6 +9,8 @@
 #include "esp.h"
 #include "cli.h"
 #include "uart.h"
+#include "qbuffer.h"
+
 
 #ifdef _USE_HW_ESP
 
@@ -24,18 +26,28 @@ typedef struct
   bool     is_log;
   bool     is_open;
   bool     is_connected;
-  bool     state_update;
+  uint8_t  state_update;
   uint16_t line_cnt;
   uint16_t line_pos[ESP_LINE_MAX];
   uint16_t buf_index;
   uint8_t  buf[ESP_BUF_MAX];
 
   uint8_t  cmd_buf[256];
+
+  uint32_t pre_time;
+  qbuffer_t q_rx;
+  uint8_t   q_buf[512];
+  uint8_t   rx_header[16];
+  uint8_t   rx_header_index;
+  uint16_t  rx_header_len;
 } esp_resp_t;
 
 
 
 static esp_resp_t esp_resp;
+
+
+static bool espClientUpdate(void);
 
 
 #ifdef _USE_HW_CLI
@@ -49,6 +61,8 @@ bool espInit(void)
   esp_resp.is_log = false;
   esp_resp.is_open = false;
   esp_resp.is_connected = false;
+
+  qbufferCreate(&esp_resp.q_rx, &esp_resp.q_buf[0], 512);
 
 #ifdef _USE_HW_CLI
   cliAdd("esp", cliEsp);
@@ -88,7 +102,9 @@ void espLogDisable(void)
 
 uint32_t espAvailable(void)
 {
-  return 0;
+  espClientUpdate();
+
+  return qbufferAvailable(&esp_resp.q_rx);
 }
 
 uint32_t espWrite(uint8_t *p_data, uint32_t length)
@@ -113,7 +129,11 @@ uint32_t espWrite(uint8_t *p_data, uint32_t length)
 
 uint8_t espRead(void)
 {
-  return 0;
+  uint8_t rx_data;
+
+  qbufferRead(&esp_resp.q_rx, &rx_data, 1);
+
+  return rx_data;
 }
 
 uint32_t espPrintf(char *fmt, ...)
@@ -260,6 +280,15 @@ bool espConnectWifi(char *ssd_str, char *pswd_str, uint32_t timeout)
   return ret;
 }
 
+bool espPing(uint32_t timeout)
+{
+  bool ret;
+
+  ret = espCmd("AT", timeout);
+
+  return ret;
+}
+
 bool espClientBegin(char *ip_str, char *port_str, uint32_t timeout)
 {
   bool ret;
@@ -319,11 +348,88 @@ bool espClientUpdate(void)
     rx_data = uartRead(uart_ch);
     if (esp_resp.is_log)
     {
-      cliPrintf("%c", rx_data);
+      //cliPrintf("%c", rx_data, rx_data);
+    }
+
+    switch(esp_resp.state_update)
+    {
+      case 0:
+        if (rx_data == 0x0D)
+        {
+          esp_resp.state_update = 1;
+        }
+        break;
+
+      case 1:
+        if (rx_data == 0x0A)
+        {
+          esp_resp.rx_header_index = 0;
+          esp_resp.state_update = 2;
+        }
+        break;
+
+      case 2:
+        if (rx_data == ':')
+        {
+          esp_resp.rx_header[esp_resp.rx_header_index] = 0;
+          uint8_t str_cnt = 0;
+          uint8_t str_pos = 0;
+          for(int i=0; i<esp_resp.buf_index; i++)
+          {
+            if (esp_resp.rx_header[i] == ',' )
+            {
+              str_cnt++;
+
+              if (str_cnt == 2)
+              {
+                str_pos = i+1;
+                break;
+              }
+            }
+          }
+          //cliPrintf("cnt : %s\n", &esp_resp.buf[str_pos]);
+
+          esp_resp.rx_header_len = (int16_t)strtoul((const char * )&esp_resp.rx_header[str_pos], (char **)NULL, (int) 0);
+          //cliPrintf("cnt : %d\n", esp_resp.rx_header_len);
+          if (esp_resp.rx_header_len > 0)
+          {
+            esp_resp.pre_time = millis();
+            esp_resp.state_update = 3;
+          }
+          else
+          {
+            esp_resp.state_update = 0;
+          }
+        }
+        else
+        {
+          esp_resp.rx_header[esp_resp.rx_header_index] = rx_data;
+          esp_resp.rx_header_index++;
+          if (esp_resp.rx_header_index >= 12)
+          {
+            esp_resp.state_update = 0;
+          }
+        }
+        break;
+
+      case 3:
+        qbufferWrite(&esp_resp.q_rx, &rx_data, 1);
+
+        esp_resp.rx_header_len--;
+        if (esp_resp.rx_header_len == 0)
+        {
+          esp_resp.state_update = 0;
+        }
+
+        if (millis()-esp_resp.pre_time >= 10)
+        {
+          esp_resp.state_update = 0;
+        }
+        esp_resp.pre_time = millis();
+        break;
     }
   }
 
-  //switch()
 
   return ret;
 }
@@ -377,6 +483,20 @@ void cliEsp(cli_args_t *args)
       {
         cliPrintf("%d:%s", i, (char *)&esp_resp.buf[esp_resp.line_pos[i]]);
       }
+    }
+
+    ret = true;
+  }
+
+  if (args->argc == 1 && args->isStr(0, "ping"))
+  {
+    if (espPing(100) == true)
+    {
+      cliPrintf("espPing OK\n");
+    }
+    else
+    {
+      cliPrintf("espPing Fail\n");
     }
 
     ret = true;
@@ -461,6 +581,15 @@ void cliEsp(cli_args_t *args)
 
           espPrintf("Rx : 0x%X\n", rx_data);
         }
+
+        if (espAvailable() > 0)
+        {
+          uint8_t rx_data;
+
+          rx_data = espRead();
+
+          cliPrintf("rx : 0x%X(%c)\n", rx_data, rx_data);
+        }
       }
       cliPrintf("espClient Exit\n");
     }
@@ -469,7 +598,7 @@ void cliEsp(cli_args_t *args)
       cliPrintf("espClientBegin Fail\n");
     }
 
-    //espClientEnd();
+    espClientEnd();
 
     espLogDisable();
     ret = true;
@@ -479,6 +608,7 @@ void cliEsp(cli_args_t *args)
   {
     cliPrintf("esp open 1~%d baud\n", UART_MAX_CH+1);
     cliPrintf("esp at [commands] timeout\n");
+    cliPrintf("esp ping \n");
     cliPrintf("esp wifi list \n");
     cliPrintf("esp wifi connect ssd password \n");
     cliPrintf("esp client begin ip_addr port\n");
